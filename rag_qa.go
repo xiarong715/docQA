@@ -15,9 +15,9 @@ import (
 // ========== 全局配置（修改为你的配置） ==========
 const (
 	// 1. 替换为你的OpenAI兼容API Key
-	OpenAIAPIKey = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+	OpenAIAPIKey = "sk-d8d18875bb554537bed80fec4df8bccc"
 	// 2. 替换为你的API地址（OpenAI官方：https://api.openai.com/v1；智谱：https://open.bigmodel.cn/api/paas/v4/；DeepSeek：https://api.deepseek.com/v1）
-	OpenAIAPIBase = "https://api.openai.com/v1"
+	OpenAIAPIBase = "https://api.deepseek.com/v1"
 	// 3. 文本分块配置（最优值）
 	ChunkSize    = 800 // 每个切片的字符数
 	ChunkOverlap = 100 // 切片重叠字符数
