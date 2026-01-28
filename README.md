@@ -23,9 +23,14 @@ go build
 # 加载文档
 ```bash
 curl -X POST http://127.0.0.1:8080/load-doc -d "doc_path=test_doc.txt"
+curl -X POST http://127.0.0.1:8080/load-doc -d "doc_path=test_lsy.txt"
 ```
 
 # 发起文档问答请求
 ```bash
 curl -X POST http://127.0.0.1:8080/qa -d "question=Go语言的核心优势是什么？"
+curl -X POST http://127.0.0.1:8080/qa -d "question=Go如何实现并发？"
+curl -X POST http://127.0.0.1:8080/qa -d "question=什么是智能体？"
+curl -X POST http://127.0.0.1:8080/qa -d "question=传统智能体与现代智能体的区别？"
+curl -X POST http://127.0.0.1:8080/qa -d "question=大语言模型的简写？"
 ```

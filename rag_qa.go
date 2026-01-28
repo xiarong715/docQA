@@ -6,8 +6,9 @@ import (
 	"os"
 	"strings"
 
-	chromago "github.com/amikos-tech/chroma-go"
-	"github.com/amikos-tech/chroma-go/types"
+	chroma "github.com/amikos-tech/chroma-go/pkg/api/v2"
+	chromaembeddings "github.com/amikos-tech/chroma-go/pkg/embeddings"
+	chromaopenai "github.com/amikos-tech/chroma-go/pkg/embeddings/openai"
 	"github.com/gin-gonic/gin"
 	"github.com/sashabaranov/go-openai"
 )
@@ -15,9 +16,9 @@ import (
 // ========== 全局配置（修改为你的配置） ==========
 const (
 	// 1. 替换为你的OpenAI兼容API Key
-	OpenAIAPIKey = "sk-d8d18875bb554537bed80fec4df8bccc"
+	OpenAIAPIKey = "sk-xxxxxxxxxxxxxxxxxxxxxxxxx" // 测试时改为可用的key
 	// 2. 替换为你的API地址（OpenAI官方：https://api.openai.com/v1；智谱：https://open.bigmodel.cn/api/paas/v4/；DeepSeek：https://api.deepseek.com/v1）
-	OpenAIAPIBase = "https://api.deepseek.com/v1"
+	OpenAIAPIBase = "https://dashscope.aliyuncs.com/compatible-mode/v1" //"https://api.openai.com/v1"
 	// 3. 文本分块配置（最优值）
 	ChunkSize    = 800 // 每个切片的字符数
 	ChunkOverlap = 100 // 切片重叠字符数
@@ -28,8 +29,8 @@ const (
 // 全局客户端
 var (
 	openaiClient *openai.Client
-	chromaClient *chromago.Client
-	collection   *chromago.Collection // 向量库集合，存储文档向量
+	chromaClient chroma.Client
+	collection   chroma.Collection // 向量库集合，存储文档向量
 )
 
 func init() {
@@ -40,23 +41,29 @@ func init() {
 
 	// 2. 初始化ChromaDB客户端（连接到本地Chroma服务器，需先启动）
 	var err error
-	chromaClient, err = chromago.NewClient(chromago.WithBasePath("http://localhost:8000"))
+	chromaClient, err = chroma.NewHTTPClient(chroma.WithBaseURL("http://172.17.0.1:8000"))
 	if err != nil {
 		panic(fmt.Sprintf("初始化向量库失败: %v", err))
 	}
 
 	// 3. 创建/获取向量库集合
 	ctx := context.Background()
-	// 先尝试获取已存在的集合
-	existingCollection, err := chromaClient.GetCollection(ctx, "doc_qa_collection", nil)
-	if err == nil && existingCollection != nil {
-		collection = existingCollection
-		fmt.Println("✅ 加载已存在的向量库集合")
-	} else {
-		// 创建新集合（需要先在服务器端创建）
-		newCollection := chromago.NewCollection(chromaClient, "", "doc_qa_collection", nil, nil, "", "")
-		collection = newCollection
-		fmt.Println("✅ 创建新的向量库集合")
+	// 创建 embedding 函数
+	embeddingFunc, err := chromaopenai.NewOpenAIEmbeddingFunction(
+		OpenAIAPIKey,
+		chromaopenai.WithModel(chromaopenai.EmbeddingModel(openai.SmallEmbedding3)),
+	)
+	if err != nil {
+		panic(fmt.Sprintf("创建 embedding 函数失败: %v", err))
+	}
+	// 先尝试获取已存在的集合，不存在则创建
+	collection, err = chromaClient.GetOrCreateCollection(
+		ctx,
+		"doc_qa_collection",
+		chroma.WithEmbeddingFunctionCreate(embeddingFunc),
+	)
+	if err != nil {
+		panic(fmt.Sprintf("获取/创建集合失败: %v", err))
 	}
 	fmt.Println("✅ 初始化完成：LLM客户端 + 向量库")
 }
@@ -88,7 +95,7 @@ func SplitText(text string, chunkSize int, chunkOverlap int) []string {
 func GetEmbedding(text string) ([]float32, error) {
 	req := openai.EmbeddingRequest{
 		Input: []string{text},
-		Model: openai.SmallEmbedding3, // 也可用 text-embedding-ada-002，效果更好
+		Model: "text-embedding-v1", //openai.QianwenEmbeddingV1, // 调用千问的文本向量化模型  // 也可用 text-embedding-ada-002，效果更好
 	}
 	resp, err := openaiClient.CreateEmbeddings(context.Background(), req)
 	if err != nil {
@@ -117,10 +124,13 @@ func LoadDocToVectorDB(docPath string) error {
 			fmt.Printf("切片 %d 向量化失败: %v\n", i, err)
 			continue
 		}
-		// 构造向量对象
-		emb := types.NewEmbeddingFromFloat32(embedding)
-		// 向量入库：embeddings, metadatas, documents, ids
-		_, err = collection.Add(context.Background(), []*types.Embedding{emb}, nil, []string{chunk}, []string{fmt.Sprintf("doc_chunk_%d", i)})
+		// 向量入库：使用 WithEmbeddings 和 WithTexts
+		emb := chromaembeddings.NewEmbeddingFromFloat32(embedding)
+		err = collection.Add(context.Background(),
+			chroma.WithIDs(chroma.DocumentID(fmt.Sprintf("doc_chunk_%d", i))),
+			chroma.WithTexts(chunk),
+			chroma.WithEmbeddings(emb),
+		)
 		if err != nil {
 			fmt.Printf("切片 %d 入库失败: %v\n", i, err)
 			continue
@@ -139,21 +149,22 @@ func RAGQA(question string) (string, error) {
 	}
 
 	// 第二步：向量库相似度检索 - 召回TopK最相关的文档片段
-	queryEmb := types.NewEmbeddingFromFloat32(quesEmbedding)
-	queryResp, err := collection.QueryWithOptions(context.Background(),
-		types.WithQueryEmbeddings([]*types.Embedding{queryEmb}),
-		types.WithNResults(TopK),
-		types.WithInclude(types.IDocuments),
+	queryEmb := chromaembeddings.NewEmbeddingFromFloat32(quesEmbedding)
+	queryResp, err := collection.Query(context.Background(),
+		chroma.WithQueryEmbeddings(queryEmb),
+		chroma.WithIncludeQuery(chroma.IncludeDocuments),
+		chroma.WithNResults(TopK),
 	)
 	if err != nil {
 		return "", fmt.Errorf("向量检索失败: %v", err)
 	}
 	// 拼接检索到的文档内容
-	var docs []string
-	if len(queryResp.Documents) > 0 {
-		docs = queryResp.Documents[0]
+	docs := queryResp.GetDocumentsGroups()[0]
+	var docStrings []string
+	for _, doc := range docs {
+		docStrings = append(docStrings, doc.ContentString())
 	}
-	contextDocs := strings.Join(docs, "\n\n")
+	contextDocs := strings.Join(docStrings, "\n\n")
 	fmt.Printf("🔍 检索到相关文档片段：\n%s\n", contextDocs)
 
 	// 第三步：构建Prompt提示词（核心！决定LLM回答质量）
@@ -170,7 +181,7 @@ func RAGQA(question string) (string, error) {
 
 	// 第四步：调用LLM生成答案
 	completionReq := openai.ChatCompletionRequest{
-		Model: openai.GPT3Dot5Turbo, // 兼容智谱glm-4、deepseek-chat等
+		Model: "qwen3-max-2026-01-23", //openai.GPT3Dot5Turbo, // 兼容智谱glm-4、deepseek-chat等
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleUser, Content: prompt},
 		},
