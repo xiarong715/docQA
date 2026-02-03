@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	chroma "github.com/amikos-tech/chroma-go/pkg/api/v2"
 	chromaembeddings "github.com/amikos-tech/chroma-go/pkg/embeddings"
@@ -16,7 +17,7 @@ import (
 // ========== 全局配置（修改为你的配置） ==========
 const (
 	// 1. 替换为你的OpenAI兼容API Key
-	OpenAIAPIKey = "sk-xxxxxxxxxxxxxxxxxxxxxxxxx" // 测试时改为可用的key
+	OpenAIAPIKey = "sk-d7b15311515f40b0a2f3e907dbc9cf35" // 测试时改为可用的key
 	// 2. 替换为你的API地址（OpenAI官方：https://api.openai.com/v1；智谱：https://open.bigmodel.cn/api/paas/v4/；DeepSeek：https://api.deepseek.com/v1）
 	OpenAIAPIBase = "https://dashscope.aliyuncs.com/compatible-mode/v1" //"https://api.openai.com/v1"
 	// 3. 文本分块配置（最优值）
@@ -95,7 +96,7 @@ func SplitText(text string, chunkSize int, chunkOverlap int) []string {
 func GetEmbedding(text string) ([]float32, error) {
 	req := openai.EmbeddingRequest{
 		Input: []string{text},
-		Model: "text-embedding-v1", //openai.QianwenEmbeddingV1, // 调用千问的文本向量化模型  // 也可用 text-embedding-ada-002，效果更好
+		Model: "text-embedding-v3", //"text-embedding-v1", //openai.QianwenEmbeddingV1, // 调用千问的文本向量化模型  // 也可用 text-embedding-ada-002，效果更好
 	}
 	resp, err := openaiClient.CreateEmbeddings(context.Background(), req)
 	if err != nil {
@@ -127,7 +128,7 @@ func LoadDocToVectorDB(docPath string) error {
 		// 向量入库：使用 WithEmbeddings 和 WithTexts
 		emb := chromaembeddings.NewEmbeddingFromFloat32(embedding)
 		err = collection.Add(context.Background(),
-			chroma.WithIDs(chroma.DocumentID(fmt.Sprintf("doc_chunk_%d", i))),
+			chroma.WithIDs(chroma.DocumentID(fmt.Sprintf("%d_chunk_%d", time.Now().UnixNano(), i))),
 			chroma.WithTexts(chunk),
 			chroma.WithEmbeddings(emb),
 		)
